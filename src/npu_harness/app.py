@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .backends.base import BackendError
 from .backends.foundry import FoundryLocalBackend
+from .backends.openvino import OpenVinoBackend
+from .backends.router import ModelRouter
 from .jobs import JobManager
 from .proxy import InferenceProxy
 from .telemetry.monitor import NpuMonitor, sample_to_dict
@@ -25,8 +27,10 @@ STATIC = Path(__file__).parent / "static"
 def create_app() -> FastAPI:
     monitor = NpuMonitor()
     backend = FoundryLocalBackend()
+    openvino = OpenVinoBackend()
+    router = ModelRouter(backend, openvino)
     jobs = JobManager()
-    proxy = InferenceProxy(backend)
+    proxy = InferenceProxy(backend, openvino)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -79,7 +83,7 @@ def create_app() -> FastAPI:
             info = await backend.system_info() if st.installed else {}
         except BackendError as e:
             raise backend_error(e)
-        return {"name": backend.name, **asdict(st), "system": info}
+        return {"name": backend.name, **asdict(st), "system": info, "openvino": router.status()}
 
     @app.post("/api/backend/start")
     async def backend_start():
@@ -97,11 +101,11 @@ def create_app() -> FastAPI:
     @app.get("/api/models")
     async def models(refresh: bool = False):
         try:
-            return [asdict(m) for m in await backend.catalog(refresh=refresh)]
+            return [asdict(m) for m in await router.catalog(refresh=refresh)]
         except BackendError as e:
             raise backend_error(e)
 
-    actions = {"download": backend.download, "load": backend.load, "unload": backend.unload, "remove": backend.remove}
+    actions = {"download": router.download, "load": router.load, "unload": router.unload, "remove": router.remove}
 
     @app.post("/api/models/{action}/{model_id:path}")
     async def model_action(action: str, model_id: str):

@@ -110,7 +110,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px; display: block; }
 .table th { text-align: left; font-weight: 600; color: var(--text-2); font-size: 12.5px; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .table tr:last-child td { border-bottom: 0; }
-.table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table .sub { color: var(--text-3); font-size: 12px; font-family: var(--mono); }
 .actions-col { width: 1%; }
 .table td.actions { white-space: nowrap; text-align: right; }

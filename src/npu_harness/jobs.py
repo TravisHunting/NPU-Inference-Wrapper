@@ -18,6 +18,7 @@ class Job:
     model_id: str
     state: str = "running"  # running | succeeded | failed
     message: str | None = None
+    notice: str | None = None  # something the user should know even though the job succeeded
     error: dict | None = None
     started: float = 0.0
     finished: float | None = None
@@ -34,7 +35,7 @@ class JobManager:
         return next((j for j in self._jobs.values()
                      if j.state == "running" and j.action == action and j.model_id == model_id), None)
 
-    def submit(self, action: str, model_id: str, fn: Callable[[], Awaitable[str]]) -> Job:
+    def submit(self, action: str, model_id: str, fn: Callable[[], Awaitable[str | tuple[str, str]]]) -> Job:
         if existing := self.active(action, model_id):
             return existing
         job = Job(next(self._ids), action, model_id, started=time.time())
@@ -42,7 +43,8 @@ class JobManager:
 
         async def run() -> None:
             try:
-                job.message = await fn()
+                result = await fn()
+                job.message, job.notice = result if isinstance(result, tuple) else (result, None)
                 job.state = "succeeded"
             except BackendError as e:
                 job.state, job.error = "failed", e.to_dict()

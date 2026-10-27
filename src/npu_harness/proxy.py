@@ -1,7 +1,8 @@
 """Stable OpenAI-compatible endpoint: forwards /v1/* to the backend and records per-request stats.
 
 Foundry Local picks a new port each time its daemon starts; clients pointed at the harness
-(http://127.0.0.1:8765/v1) keep working across restarts.
+(http://127.0.0.1:8765/v1) keep working across restarts. Chat requests for models the harness
+runs itself (OpenVINO GenAI) are answered in-process instead of being forwarded.
 """
 
 from __future__ import annotations
@@ -17,8 +18,20 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .backends.base import BackendError
 from .backends.foundry import FoundryLocalBackend
+from .backends.openvino import OpenVinoBackend
 
 _HOP_HEADERS = {"host", "content-length", "connection", "transfer-encoding", "keep-alive", "accept-encoding"}
+
+
+def _has_content(line: bytes) -> bool:
+    """True for an SSE chunk carrying non-empty generated text."""
+    if not line.startswith(b"data:") or b"content" not in line:
+        return False
+    try:
+        choices = json.loads(line[5:]).get("choices") or []
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    return bool(choices and (choices[0].get("delta") or {}).get("content"))
 
 
 @dataclass
@@ -35,8 +48,9 @@ class RequestStat:
 
 
 class InferenceProxy:
-    def __init__(self, backend: FoundryLocalBackend, keep: int = 100):
+    def __init__(self, backend: FoundryLocalBackend, local: OpenVinoBackend, keep: int = 100):
         self.backend = backend
+        self.local = local
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=600, write=60, pool=5))
         self.stats: collections.deque[RequestStat] = collections.deque(maxlen=keep)
 
@@ -70,6 +84,8 @@ class InferenceProxy:
             except json.JSONDecodeError:
                 pass
         started = time.time()  # before sending: non-streaming responses arrive only once generation is done
+        if path == "chat/completions" and self.local.is_loaded(payload.get("model")):
+            return await self._local_chat(payload, started)
         try:
             upstream = await self._send(request, path, body)
         except BackendError as e:
@@ -95,28 +111,52 @@ class InferenceProxy:
                 self._finish(stat)
             return Response(content, status_code=upstream.status_code, headers=resp_headers)
 
-        async def relay():
-            tokens = 0
-            buffer = b""
-            try:
-                async for chunk in upstream.aiter_raw():
-                    if track:
-                        buffer += chunk
-                        *lines, buffer = buffer.split(b"\n")
-                        for line in lines:
-                            if line.startswith(b"data:") and b'"content":"' in line and b'"content":""' not in line:
-                                tokens += 1  # Foundry streams roughly one token per chunk
-                                if stat.ttft_ms is None:
-                                    stat.ttft_ms = (time.time() - stat.ts) * 1000
-                    yield chunk
-            finally:
-                await upstream.aclose()
-                if track:
-                    stat.duration_ms = (time.time() - stat.ts) * 1000
-                    stat.completion_tokens = tokens
-                    self._finish(stat)
+        return StreamingResponse(self._tracked(upstream.aiter_raw(), stat if track else None, upstream.aclose),
+                                 status_code=upstream.status_code, headers=resp_headers)
 
-        return StreamingResponse(relay(), status_code=upstream.status_code, headers=resp_headers)
+    async def _local_chat(self, payload: dict, started: float) -> Response:
+        stat = RequestStat(ts=started, path="chat/completions", model=payload.get("model"), status=200,
+                           stream=bool(payload.get("stream")))
+        usage: dict = {}
+        try:
+            result = await self.local.chat(payload, usage_sink=usage)
+        except BackendError as e:
+            stat.status = 400 if e.code in ("INVALID_REQUEST", "CONTEXT_LENGTH_EXCEEDED") else 500
+            self.stats.append(stat)
+            return JSONResponse({"error": e.to_dict()}, status_code=stat.status)
+        if isinstance(result, dict):
+            stat.duration_ms = (time.time() - started) * 1000
+            stat.completion_tokens = result["usage"]["completion_tokens"]
+            self._finish(stat)
+            return JSONResponse(result)
+        return StreamingResponse(self._tracked(result, stat, None, usage), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache"})
+
+    async def _tracked(self, chunks, stat: RequestStat | None, close, usage: dict | None = None):
+        """Relay an SSE byte stream, counting content chunks and time to first token.
+        An exact token count in `usage` (filled by the backend as the stream ends) wins over the chunk count."""
+        tokens = 0
+        buffer = b""
+        try:
+            async for chunk in chunks:
+                if stat is not None:
+                    buffer += chunk
+                    *lines, buffer = buffer.split(b"\n")
+                    for line in lines:
+                        if _has_content(line):
+                            tokens += 1  # both backends stream roughly one token per chunk
+                            if stat.ttft_ms is None:
+                                stat.ttft_ms = (time.time() - stat.ts) * 1000
+                yield chunk
+        finally:
+            if close is not None:
+                await close()
+            elif hasattr(chunks, "aclose"):
+                await chunks.aclose()
+            if stat is not None:
+                stat.duration_ms = (time.time() - stat.ts) * 1000
+                stat.completion_tokens = (usage or {}).get("completion_tokens", tokens)
+                self._finish(stat)
 
     def _finish(self, stat: RequestStat) -> None:
         if stat.completion_tokens and stat.duration_ms:

@@ -42,6 +42,8 @@ const fmtPct = (v) => (v == null ? "–" : `${v.toFixed(v < 10 ? 1 : 0)}%`);
 const fmtMs = (ms) => (ms == null ? "–" : ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`);
 const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const runtimeLabel = (ep) => (ep || "").replace(/ExecutionProvider$/, "") || "–";
+const isDirect = (m) => m.extra?.engine === "openvino-genai";
+const modelLabel = (m) => `${m.alias} · ${m.device.toUpperCase()}${isDirect(m) ? " · OpenVINO GenAI" : ""}`;
 
 function setRows(tbody, rows, emptyText, cols) {
   tbody.replaceChildren(...(rows.length ? rows : [h("tr", {}, h("td", { colspan: cols, class: "empty" }, emptyText))]));
@@ -221,6 +223,13 @@ async function refreshBackend() {
     ["NPUs seen", (sys.system?.npus ?? []).map((n) => n.name).join(", ") || "none"],
     ["GPUs seen", (sys.system?.gpus ?? []).map((g) => g.name).join(", ") || "none"],
   ];
+  const ovi = backend.openvino ?? {};
+  rows.push(["OpenVINO GenAI", ovi.available
+    ? `${ovi.version} · ${(ovi.devices ?? []).join(", ")} · fallback for OpenVINO models`
+    : "not installed (no direct-load fallback)"]);
+  for (const [runtime, why] of Object.entries(ovi.foundry_fallbacks ?? {})) {
+    rows.push(["Bypassing", `${runtimeLabel(runtime)} in Foundry: ${why}`]);
+  }
   $("#foundry-kv").replaceChildren(...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)]));
   $("#foundry-warnings").replaceChildren(...(sys.warnings ?? []).map((w) =>
     h("div", { class: "banner banner-warning" }, typeof w === "string" ? w : JSON.stringify(w))));
@@ -247,7 +256,7 @@ async function refreshModels(refresh = false) {
   }
   const loaded = models.filter((m) => m.loaded);
   $("#t-loaded").textContent = loaded.length;
-  $("#t-loaded-sub").textContent = loaded.length ? loaded.map((m) => `${m.alias} (${m.device.toUpperCase()})`).join(", ") : "in Foundry Local";
+  $("#t-loaded-sub").textContent = loaded.length ? loaded.map(modelLabel).join(", ") : "none yet";
   renderModels();
   return models;
 }
@@ -278,7 +287,9 @@ function modelRow(m) {
     h("td", {}, h("span", { class: `badge device-${m.device}` }, m.device.toUpperCase())),
     h("td", {}, runtimeLabel(m.runtime)),
     h("td", { class: "num" }, fmtMb(m.size_mb)),
-    h("td", {}, m.loaded ? h("span", { class: "badge loaded" }, "Loaded") : m.cached ? h("span", { class: "badge" }, "Downloaded") : ""),
+    h("td", {}, m.loaded
+      ? [h("span", { class: "badge loaded" }, "Loaded"), isDirect(m) && h("div", { class: "sub" }, "via OpenVINO GenAI")]
+      : m.cached ? h("span", { class: "badge" }, "Downloaded") : ""),
     h("td", { class: "actions" }, actions),
   );
 }
@@ -319,23 +330,30 @@ async function pollJobs() {
   try { jobs = await api("/api/jobs"); } catch { return; }
   renderJobs();
   const finished = jobs.some((j) => before.has(j.id) && j.state !== "running");
-  if (finished) { await refreshModels(); fillModelSelect(); }
+  if (finished) { await refreshModels(); fillModelSelect(); refreshBackend(); }
   else renderModels();
   if (jobs.some((j) => j.state === "running")) jobTimer = setTimeout(pollJobs, 1000);
 }
 
 function renderJobs() {
-  const els = jobs.filter((j) => !dismissed.has(j.id) && (j.state === "running" || j.state === "failed")).map((j) => {
+  const recent = (j) => j.finished && Date.now() / 1000 - j.finished < 600;
+  const visible = (j) => j.state === "running" || (recent(j) && (j.state === "failed" || j.notice));
+  const els = jobs.filter((j) => !dismissed.has(j.id) && visible(j)).map((j) => {
     if (j.state === "running") {
       const secs = Math.round(Date.now() / 1000 - j.started);
       const note = j.action === "load" ? " · first load on an NPU compiles the model and can take a few minutes" : "";
       return h("div", { class: "job" }, h("span", { class: "spinner" }), `${verbs[j.action]} ${j.model_id}… ${secs}s`, h("span", { class: "muted" }, note));
     }
+    const dismiss = h("button", { class: "btn", onclick: () => { dismissed.add(j.id); renderJobs(); } }, "Dismiss");
+    if (j.state === "succeeded") {
+      return h("div", { class: "banner banner-warning" },
+        h("div", { class: "row" }, h("div", {}, h("strong", {}, j.message), j.notice), dismiss));
+    }
     const e = j.error ?? {};
     return h("div", { class: "banner banner-critical" },
       h("div", { class: "row" },
         h("div", {}, h("strong", {}, `${verbs[j.action]} ${j.model_id} failed`), e.message ?? "Unknown error"),
-        h("button", { class: "btn", onclick: () => { dismissed.add(j.id); renderJobs(); } }, "Dismiss")),
+        dismiss),
       e.detail && h("div", { class: "detail" }, e.detail),
       e.hint && h("div", { class: "hint" }, e.hint));
   });
@@ -365,7 +383,7 @@ function fillModelSelect() {
   const prev = sel.value;
   const loaded = models.filter((m) => m.loaded && (m.task ?? "chat") === "chat");
   sel.replaceChildren(...(loaded.length
-    ? loaded.map((m) => h("option", { value: m.id }, `${m.alias} · ${m.device.toUpperCase()}`))
+    ? loaded.map((m) => h("option", { value: m.id }, modelLabel(m)))
     : [h("option", { value: "" }, "No chat model loaded")]));
   if (loaded.some((m) => m.id === prev)) sel.value = prev;
   else { const npu = loaded.find((m) => m.device === "npu"); if (npu) sel.value = npu.id; }
@@ -402,12 +420,12 @@ async function sendChat(ev) {
 
   const sys = $("#sys-prompt").value.trim();
   const body = {
-    model, stream: true,
+    model, stream: true, stream_options: { include_usage: true },
     temperature: Number($("#temp").value), max_tokens: Number($("#max-tokens").value),
     messages: [...(sys ? [{ role: "system", content: sys }] : []), ...chat],
   };
   const t0 = performance.now();
-  let ttft = null, tokens = 0, reply = "";
+  let ttft = null, tokens = 0, exactTokens = null, reply = "";
   try {
     const res = await fetch("/v1/chat/completions", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: chatAbort.signal,
@@ -429,7 +447,9 @@ async function sendChat(ev) {
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (data === "[DONE]") continue;
-        const delta = JSON.parse(data).choices?.[0]?.delta?.content;
+        const msg = JSON.parse(data);
+        if (msg.usage?.completion_tokens) exactTokens = msg.usage.completion_tokens;
+        const delta = msg.choices?.[0]?.delta?.content;
         if (delta) {
           if (ttft == null) ttft = performance.now() - t0;
           tokens++;
@@ -446,8 +466,10 @@ async function sendChat(ev) {
     $("#chat-send").textContent = "Send";
     if (reply) chat.push({ role: "assistant", content: reply });
     else if (out.isConnected && out.textContent === "…") out.textContent = "(no output)";
+    // Prefer the backend's exact count: streamed chunks can hold more than one token.
+    const n = exactTokens ?? tokens;
     const genSecs = (performance.now() - t0 - (ttft ?? 0)) / 1000;
-    setChatStats(ttft, tokens, tokens && genSecs > 0 ? (tokens / genSecs).toFixed(1) : null);
+    setChatStats(ttft, n, n && genSecs > 0 ? (n / genSecs).toFixed(1) : null);
     refreshRequests();
   }
 }

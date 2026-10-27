@@ -15,6 +15,12 @@ what it's doing, which models run on it, and an API to call those models.
 - [x] Chat playground with streaming, TTFT and tokens/sec
 - [x] Stable OpenAI-compatible `/v1` proxy with per-request stats
 
+## Done (v0.2)
+
+- [x] OpenVINO GenAI backend that runs Foundry's cached OpenVINO NPU/GPU models directly, with compile caching
+- [x] Automatic fallback when Foundry can't load an OpenVINO variant, remembered per runtime for the session
+- [x] Exact token counts for in-process models (streamed chunks can hold several tokens)
+
 ## Next
 
 ### Make the NPU path work on more machines
@@ -23,6 +29,13 @@ what it's doing, which models run on it, and an API to call those models.
 - [ ] Show download progress (the CLI's JSON mode only reports completion; parse text-mode progress or watch the cache directory).
 - [ ] Detect when Foundry Local isn't installed and offer a one-click `winget install`.
 - [ ] Test on AMD Ryzen AI and Snapdragon X machines; record which catalog models have NPU builds for each.
+
+### OpenVINO backend
+- [ ] Setting to prefer OpenVINO GenAI for Intel NPU models even when Foundry works (compare speed and memory).
+- [ ] Only one generation runs per in-process model at a time; queue status in the UI, or continuous batching.
+- [ ] Let users trade compile time for context: expose `MAX_PROMPT_LEN` (4096 → 1024 compiles about 5x faster).
+- [ ] Load models from the OpenVINO Hugging Face org that aren't in Foundry's catalog.
+- [ ] Tool calling and `response_format` for in-process models.
 
 ### Telemetry
 - [ ] Mark inference requests on the utilization chart so you can see the NPU working for each request.
@@ -48,5 +61,5 @@ what it's doing, which models run on it, and an API to call those models.
 
 - **Intel NPU/GPU loads fail on this dev machine** (Foundry Local 0.12.1, ONNX Runtime 1.31.0, Windows ML OpenVINO
   EP package 1.8.95): `Experimental function OrtEpApi_ReleaseEpContextConfig_SinceV28 is not available in this build`.
-  The OpenVINO EP package and Foundry's ONNX Runtime are out of step. CPU and WebGPU builds work. The harness explains
-  this when it happens; the fix has to come from a Windows ML EP or Foundry Local update.
+  The OpenVINO EP package and Foundry's ONNX Runtime are out of step. The harness now works around it by loading those
+  models directly with OpenVINO GenAI; a Windows ML EP or Foundry Local update should fix Foundry's own path.

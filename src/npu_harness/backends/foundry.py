@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import time
+from pathlib import Path
 
 from .base import BackendError, ModelVariant, ServiceStatus
 
@@ -67,6 +68,7 @@ class FoundryLocalBackend:
         self._catalog_at = 0.0
         self._endpoint: str | None = None
         self._system: dict | None = None
+        self._cache_root: Path | None = None
         self._lock = asyncio.Lock()  # serialise state-changing CLI calls
 
     # -- CLI plumbing -----------------------------------------------------------------------
@@ -192,6 +194,23 @@ class FoundryLocalBackend:
     async def loaded_ids(self) -> set[str]:
         data = await self._run("model", "list", "--loaded", timeout=30)
         return {m["id"] for m in data.get("models", [])}
+
+    async def model_path(self, model_id: str) -> Path | None:
+        """Folder holding a cached variant. Every cached model folder carries an
+        inference_model.json whose Name is the variant id."""
+        if self._cache_root is None:
+            self._cache_root = Path((await self._run("cache", "location", timeout=30))["path"])
+
+        def find() -> Path | None:
+            for marker in self._cache_root.glob("*/*/*/inference_model.json"):
+                try:
+                    if json.loads(marker.read_text(encoding="utf-8")).get("Name") == model_id:
+                        return marker.parent
+                except (OSError, json.JSONDecodeError):
+                    continue
+            return None
+
+        return await asyncio.to_thread(find)
 
     def _mark(self, model_id: str, **fields) -> None:
         for v in self._catalog or []:

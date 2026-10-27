@@ -6,6 +6,8 @@ A local dashboard and model manager for the NPU in your Windows PC, built on
 - **Dashboard**: live NPU utilization, NPU memory, which processes are using the NPU, driver details.
 - **Models**: browse Foundry Local's catalog filtered to NPU builds; download, load, unload and delete them.
   When a load fails, the harness digs the real cause out of Foundry's logs and explains it.
+- **OpenVINO fallback**: if Foundry can't start an Intel NPU/GPU model, the harness runs the same downloaded
+  files directly with OpenVINO GenAI, which needs neither ONNX Runtime nor the Windows execution-provider package.
 - **Playground**: chat with a loaded model and see time to first token and tokens/sec.
 - **API**: a stable OpenAI-compatible endpoint at `http://127.0.0.1:8765/v1` (Foundry's own port changes on
   every restart), with per-request stats on the dashboard.
@@ -32,7 +34,8 @@ Then open http://127.0.0.1:8765. The server binds to localhost only; pass `--hos
 | Utilization and memory | Windows performance counters (`GPU Engine`, `GPU Adapter Memory`, `GPU Process Memory`), the same source Task Manager uses. No admin rights needed. |
 | Driver details | `Win32_PnPSignedDriver` for the `ComputeAccelerator` device class. |
 | Model management | The `foundry` CLI with `-o json`. Foundry Local 2.x has no management REST API, and going through the CLI keeps models in the shared daemon where any client can use them. |
-| Inference | Proxied to the Foundry daemon's OpenAI-compatible `/v1` API. |
+| Inference | Proxied to the Foundry daemon's OpenAI-compatible `/v1` API, or answered in-process for models running on OpenVINO GenAI. |
+| OpenVINO fallback | Foundry's `*-openvino-npu`/`-gpu` variants are OpenVINO IR wrapped in a small ONNX "EPContext" file. When Foundry's load fails, the harness hard-links the IR and tokenizers into `%LOCALAPPDATA%\NPU-Harness\openvino\models` (no copy), applies the NPU settings from the model's `genai_config.json` (e.g. `MAX_PROMPT_LEN`), and loads it with `openvino_genai.LLMPipeline`. Compiled blobs are cached in `...\openvino\compiled`, so the first NPU load compiles (about 90 s for qwen2.5-0.5b) and later loads take about 2 s. The failure is remembered for the session, so later loads skip Foundry for that runtime. |
 
 **What Windows doesn't expose:** NPU temperature, power draw and clock speed. Vendors don't publish them, so the
 dashboard can't show them.
@@ -42,7 +45,8 @@ dashboard can't show them.
 ```
 src/npu_harness/
   telemetry/   d3dkmt.py (adapter discovery), pdh.py (perf counters), monitor.py (background sampler)
-  backends/    base.py (backend interface), foundry.py (Foundry Local)
+  backends/    base.py (backend interface), foundry.py (Foundry Local), openvino.py (OpenVINO GenAI),
+               router.py (Foundry first, OpenVINO fallback)
   jobs.py      long-running download/load jobs
   proxy.py     /v1 proxy + request stats
   app.py       FastAPI routes
