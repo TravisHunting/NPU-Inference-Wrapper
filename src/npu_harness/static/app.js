@@ -55,6 +55,7 @@ const tabButtons = document.querySelectorAll(".tabs button");
 function showTab(name) {
   tabButtons.forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   document.querySelectorAll(".tab-panel").forEach((p) => (p.hidden = p.id !== `tab-${name}`));
+  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
   try { localStorage.setItem("tab", name); } catch {}
   if (name === "models") refreshModels();
   if (name === "playground") refreshModels().then(fillModelSelect);
@@ -338,7 +339,10 @@ async function pollJobs() {
 function renderJobs() {
   const recent = (j) => j.finished && Date.now() / 1000 - j.finished < 600;
   const visible = (j) => j.state === "running" || (recent(j) && (j.state === "failed" || j.notice));
-  const els = jobs.filter((j) => !dismissed.has(j.id) && visible(j)).map((j) => {
+  // jobs arrive newest first; show only the latest job per model so repeat loads don't stack notices
+  const seen = new Set();
+  const latest = (j) => !seen.has(j.model_id) && seen.add(j.model_id);
+  const els = jobs.filter((j) => latest(j) && !dismissed.has(j.id) && visible(j)).map((j) => {
     if (j.state === "running") {
       const secs = Math.round(Date.now() / 1000 - j.started);
       const note = j.action === "load" ? " · first load on an NPU compiles the model and can take a few minutes" : "";
@@ -520,6 +524,9 @@ refreshBackend().then(() => refreshModels()).then(pollJobs);
 refreshRequests();
 setInterval(refreshBackend, 15000);
 setInterval(refreshRequests, 4000);
-let initialTab = "dashboard";
-try { initialTab = localStorage.getItem("tab") || "dashboard"; } catch {}
-showTab(initialTab);
+const TABS = [...tabButtons].map((b) => b.dataset.tab);
+const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : null);
+let initialTab = tabFromHash();
+try { initialTab ??= localStorage.getItem("tab"); } catch {}
+showTab(TABS.includes(initialTab) ? initialTab : "dashboard");
+addEventListener("hashchange", () => { const t = tabFromHash(); if (t) showTab(t); });

@@ -146,7 +146,7 @@
     <section id="tab-api" class="tab-panel" hidden>
       <div class="card">
         <h2>OpenAI-compatible endpoint</h2>
-        <p>Point any OpenAI client at the harness. It forwards to Foundry Local and keeps a stable address even when Foundry's own port changes.</p>
+        <p>Point any OpenAI client at the harness. Requests go to whichever engine holds the model (Foundry Local, or OpenVINO GenAI running inside the harness), and the address stays the same even when Foundry's own port changes.</p>
         <div class="copy-row"><code id="api-base"></code><button class="btn" data-copy="api-base">Copy</button></div>
       </div>
       <div class="grid-2">
@@ -172,7 +172,7 @@
             <tr><td>POST</td><td><code>/api/models/{download|load|unload|remove}/{id}</code></td><td>Start a model job; returns the job</td></tr>
             <tr><td>GET</td><td><code>/api/jobs</code></td><td>Job progress and errors</td></tr>
             <tr><td>GET</td><td><code>/api/requests</code></td><td>Recent inference requests with TTFT and tokens/sec</td></tr>
-            <tr><td>*</td><td><code>/v1/*</code></td><td>OpenAI-compatible inference, forwarded to Foundry Local</td></tr>
+            <tr><td>*</td><td><code>/v1/*</code></td><td>OpenAI-compatible inference, routed to Foundry Local or the in-process OpenVINO engine</td></tr>
           </tbody>
         </table>
         <p class="muted">Interactive docs: <a href="/docs">/docs</a></p>

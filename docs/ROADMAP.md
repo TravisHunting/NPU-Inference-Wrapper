@@ -20,6 +20,7 @@ what it's doing, which models run on it, and an API to call those models.
 - [x] OpenVINO GenAI backend that runs Foundry's cached OpenVINO NPU/GPU models directly, with compile caching
 - [x] Automatic fallback when Foundry can't load an OpenVINO variant, remembered per runtime for the session
 - [x] Exact token counts for in-process models (streamed chunks can hold several tokens)
+- [x] Linkable dashboard tabs (`/#models`, …), README screenshots and architecture docs
 
 ## Next
 
