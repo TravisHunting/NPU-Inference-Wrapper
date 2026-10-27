@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NPU Harness</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">NPU Harness</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
+      <button role="tab" data-tab="models">Models</button>
+      <button role="tab" data-tab="playground">Playground</button>
+      <button role="tab" data-tab="api">API</button>
+    </nav>
+    <div class="service" id="service-pill"><span class="dot"></span><span class="label">Checking Foundry Local…</span></div>
+  </header>
+
+  <main>
+    <!-- Dashboard ------------------------------------------------------------------------>
+    <section id="tab-dashboard" class="tab-panel">
+      <div id="npu-error" class="banner banner-critical" hidden></div>
+
+      <div class="tiles">
+        <div class="tile">
+          <div class="tile-label">NPU utilization</div>
+          <div class="tile-value" id="t-util">–</div>
+          <div class="tile-sub" id="t-util-sub">5-min peak –</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">NPU memory (shared)</div>
+          <div class="tile-value" id="t-mem">–</div>
+          <div class="tile-sub" id="t-mem-sub">across <span id="t-procs">–</span> processes</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">System RAM available</div>
+          <div class="tile-value" id="t-ram">–</div>
+          <div class="tile-sub" id="t-ram-sub">NPU models live in system RAM</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Models loaded</div>
+          <div class="tile-value" id="t-loaded">–</div>
+          <div class="tile-sub" id="t-loaded-sub">in Foundry Local</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>NPU utilization</h2><span class="muted">% · last 5 minutes</span></div>
+          <div class="chart" id="chart-util"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>NPU shared memory</h2><span class="muted">last 5 minutes</span></div>
+          <div class="chart" id="chart-mem"></div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>Processes using the NPU</h2></div>
+          <table class="table">
+            <thead><tr><th>Process</th><th class="num">PID</th><th class="num">Util %</th><th class="num">Memory</th></tr></thead>
+            <tbody id="proc-rows"><tr><td colspan="4" class="empty">Waiting for data…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Recent inference</h2><span class="muted">via the harness API</span></div>
+          <table class="table">
+            <thead><tr><th>Model</th><th class="num">TTFT</th><th class="num">Tokens</th><th class="num">Tok/s</th></tr></thead>
+            <tbody id="req-rows"><tr><td colspan="4" class="empty">No requests yet. Try the Playground.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>Device</h2></div>
+          <dl class="kv" id="device-kv"></dl>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Foundry Local</h2></div>
+          <dl class="kv" id="foundry-kv"></dl>
+          <div id="foundry-warnings"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Models --------------------------------------------------------------------------->
+    <section id="tab-models" class="tab-panel" hidden>
+      <div class="toolbar">
+        <div class="segmented" id="device-filter" role="radiogroup" aria-label="Device">
+          <button data-device="npu" aria-pressed="true">NPU</button>
+          <button data-device="gpu">GPU</button>
+          <button data-device="cpu">CPU</button>
+          <button data-device="">All</button>
+        </div>
+        <input type="search" id="model-search" placeholder="Search models…" aria-label="Search models">
+        <label class="check"><input type="checkbox" id="cached-only"> Downloaded only</label>
+        <span class="spacer"></span>
+        <button class="btn" id="refresh-models">Refresh catalog</button>
+      </div>
+      <div id="jobs"></div>
+      <div class="card flush">
+        <table class="table">
+          <thead><tr><th>Model</th><th>Variant</th><th>Device</th><th>Runtime</th><th class="num">Size</th><th>Status</th><th class="actions-col"></th></tr></thead>
+          <tbody id="model-rows"><tr><td colspan="7" class="empty">Loading catalog…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Playground ----------------------------------------------------------------------->
+    <section id="tab-playground" class="tab-panel" hidden>
+      <div class="playground">
+        <div class="card chat-card">
+          <div class="toolbar">
+            <select id="chat-model" aria-label="Model"></select>
+            <span class="spacer"></span>
+            <span class="live-npu" title="Live NPU utilization">NPU <strong id="live-npu">–</strong></span>
+            <button class="btn" id="chat-clear">Clear</button>
+          </div>
+          <div id="chat-log" class="chat-log">
+            <div class="empty" id="chat-empty">Load a model on the Models tab, then say hello.</div>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <textarea id="chat-input" rows="2" placeholder="Message the model… (Enter to send, Shift+Enter for newline)"></textarea>
+            <button class="btn btn-primary" id="chat-send" type="submit">Send</button>
+          </form>
+        </div>
+        <div class="card side">
+          <h2>Settings</h2>
+          <label class="field">System prompt<textarea id="sys-prompt" rows="4">You are a helpful assistant.</textarea></label>
+          <label class="field">Temperature <input id="temp" type="number" min="0" max="2" step="0.1" value="0.7"></label>
+          <label class="field">Max tokens <input id="max-tokens" type="number" min="1" max="8192" value="512"></label>
+          <h2>Last response</h2>
+          <dl class="kv" id="chat-stats"><dt>Time to first token</dt><dd>–</dd><dt>Tokens</dt><dd>–</dd><dt>Tokens / sec</dt><dd>–</dd></dl>
+        </div>
+      </div>
+    </section>
+
+    <!-- API ------------------------------------------------------------------------------>
+    <section id="tab-api" class="tab-panel" hidden>
+      <div class="card">
+        <h2>OpenAI-compatible endpoint</h2>
+        <p>Point any OpenAI client at the harness. It forwards to Foundry Local and keeps a stable address even when Foundry's own port changes.</p>
+        <div class="copy-row"><code id="api-base"></code><button class="btn" data-copy="api-base">Copy</button></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>curl</h2><button class="btn" data-copy="snip-curl">Copy</button></div>
+          <pre><code id="snip-curl"></code></pre>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Python (openai)</h2><button class="btn" data-copy="snip-py">Copy</button></div>
+          <pre><code id="snip-py"></code></pre>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Harness API</h2>
+        <table class="table">
+          <thead><tr><th>Method</th><th>Path</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>GET</td><td><code>/api/npu</code></td><td>NPU device info and the latest telemetry sample</td></tr>
+            <tr><td>GET</td><td><code>/api/npu/history</code></td><td>Last 5 minutes of utilization and memory</td></tr>
+            <tr><td>GET</td><td><code>/api/npu/stream</code></td><td>Live telemetry as server-sent events</td></tr>
+            <tr><td>GET</td><td><code>/api/backend</code></td><td>Foundry Local service status, versions, detected hardware</td></tr>
+            <tr><td>GET</td><td><code>/api/models</code></td><td>Model catalog with cached / loaded state</td></tr>
+            <tr><td>POST</td><td><code>/api/models/{download|load|unload|remove}/{id}</code></td><td>Start a model job; returns the job</td></tr>
+            <tr><td>GET</td><td><code>/api/jobs</code></td><td>Job progress and errors</td></tr>
+            <tr><td>GET</td><td><code>/api/requests</code></td><td>Recent inference requests with TTFT and tokens/sec</td></tr>
+            <tr><td>*</td><td><code>/v1/*</code></td><td>OpenAI-compatible inference, forwarded to Foundry Local</td></tr>
+          </tbody>
+        </table>
+        <p class="muted">Interactive docs: <a href="/docs">/docs</a></p>
+      </div>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip" role="status" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
